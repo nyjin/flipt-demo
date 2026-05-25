@@ -175,6 +175,94 @@ curl -s -X POST http://localhost:8080/ofrep/v1/evaluate/flags/demo-api \
 # => {"key":"demo-api","reason":"DEFAULT","variant":"true","value":true}
 ```
 
+## 테스트
+
+### 백엔드 테스트
+
+```bash
+cd apps/backend
+./gradlew test
+```
+
+- `FeatureFlagAspectTest` — 플래그 ON 이면 메서드 실행, OFF 면 `FeatureDisabledException`
+- `DemoControllerTest` — 플래그 ON→200, OFF→404(`$.flag` 확인), `/api/health` 는 항상 200
+
+### git-native 동작 검증
+
+Flipt v2 의 `local` 스토리지는 `/flags` 를 **실제 git 저장소**로 다룹니다
+("플래그 = 선언형 파일", "변경 = git 커밋"). 아래처럼 단계별로 검증할 수 있습니다.
+
+| 검증 대상 | 방법 |
+| --- | --- |
+| 선언형 플래그 유효성 | `flipt validate` (CI 에서도 사용) |
+| 저장소가 진짜 git repo 인지 | 컨테이너의 `/flags/.git` 존재 확인 |
+| 환경별 디렉터리 격리 | env 별 OFREP 평가 비교 |
+| **커밋이 플래그 상태를 결정** | 커밋 → flipt 재시작 → 재평가 |
+| 롤백 | `git revert` → 재시작 → 재평가 |
+
+**1) 선언형 검증 + 저장소/격리 확인**
+
+```bash
+# 플래그 YAML 검증
+docker run --rm -v "$PWD/apps/flipt/flags:/flags" -w /flags \
+  docker.flipt.io/flipt/flipt:v2 /flipt validate
+
+# Flipt 기동 후, /flags 가 git repo 인지 + 환경별 격리 확인
+docker compose up -d --build flipt
+docker compose exec flipt ls -la /flags/.git          # objects/refs/HEAD 등 존재
+for env in dev preview prod; do
+  printf '%-8s ' "$env:"
+  curl -s -X POST http://localhost:8080/ofrep/v1/evaluate/flags/beta-feature \
+    -H 'Content-Type: application/json' \
+    -H "X-Flipt-Environment: $env" -H 'X-Flipt-Namespace: default' -d '{}'; echo
+done
+# dev => value:true,  preview/prod => value:false
+```
+
+**2) GitOps 라운드트립 — "git 커밋이 플래그 상태를 결정한다"**
+
+데모는 플래그를 이미지에 굽기 때문에, 라운드트립은 별도 git repo 를 bind-mount 해
+검증합니다(기존 스택은 그대로 둔 채 8090 포트 사용):
+
+```bash
+# 1. 호스트에 git repo 생성 (flipt 유저 uid 100 이 읽도록 권한 부여)
+REPO="$(mktemp -d)/repo"; mkdir -p "$REPO"
+cp -R apps/flipt/flags/. "$REPO/"
+git -C "$REPO" init -q -b main && git -C "$REPO" add . && git -C "$REPO" commit -qm seed
+chmod -R a+rwX "$REPO"
+
+# 2. bind-mount 로 flipt 기동
+docker run -d --name flipt-gitnative -p 8090:8080 \
+  -v "$REPO:/flags" \
+  -v "$PWD/apps/flipt/config/config.yml:/etc/flipt/config/default.yml:ro" \
+  docker.flipt.io/flipt/flipt:v2
+
+eval_demo() { curl -s -X POST http://localhost:8090/ofrep/v1/evaluate/flags/demo-api \
+  -H 'Content-Type: application/json' \
+  -H 'X-Flipt-Environment: dev' -H 'X-Flipt-Namespace: default' -d '{}'; echo; }
+
+sleep 3; eval_demo            # => value:true
+
+# 3. demo-api 만 끄도록 커밋 후 재시작 → 평가가 false 로 바뀜 (커밋이 상태를 결정)
+sed -i '' '/key: demo-api/,/enabled:/ s/enabled: true/enabled: false/' \
+  "$REPO/dev/default/features.yaml"        # Linux 는 sed -i (빈 따옴표 제거)
+git -C "$REPO" commit -aqm "disable demo-api in dev"
+docker restart flipt-gitnative; sleep 3
+eval_demo                     # => value:false
+
+# 4. 롤백: git revert 로 되돌리면 다시 true
+git -C "$REPO" revert --no-edit HEAD
+docker restart flipt-gitnative; sleep 3
+eval_demo                     # => value:true
+
+# 5. 정리
+docker rm -f flipt-gitnative; rm -rf "$(dirname "$REPO")"
+```
+
+> `local` 백엔드는 **시작 시점의 git HEAD** 를 읽으므로, 외부에서 만든 커밋을 반영하려면
+> 재시작이 필요합니다. 반대로 **Flipt UI 토글**은 즉시 서빙되며 내부 git 에 자동
+> 커밋됩니다(write→commit).
+
 ## CI (GitHub Actions)
 
 - **backend-ci** — `apps/backend` 변경 시 JDK 21 로 `./gradlew build`(컴파일 + 테스트).
