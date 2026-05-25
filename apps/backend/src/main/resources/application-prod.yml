@@ -1,0 +1,6 @@
+flipt:
+  environment: prod
+
+logging:
+  level:
+    com.example.fliptdemo: INFO

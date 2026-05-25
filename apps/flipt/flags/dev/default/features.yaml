@@ -1,0 +1,16 @@
+version: "1.4"
+namespace:
+  key: default
+  name: Default
+  description: Default namespace for the dev environment
+flags:
+  - key: demo-api
+    name: Demo API
+    type: BOOLEAN_FLAG_TYPE
+    description: Toggles the GET /api/demo/hello endpoint
+    enabled: true
+  - key: beta-feature
+    name: Beta Feature
+    type: BOOLEAN_FLAG_TYPE
+    description: Toggles the GET /api/demo/beta endpoint (on in dev only)
+    enabled: true

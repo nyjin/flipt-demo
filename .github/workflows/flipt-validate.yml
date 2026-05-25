@@ -1,0 +1,27 @@
+name: Flipt Validate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/flipt/**"
+      - ".github/workflows/flipt-validate.yml"
+  pull_request:
+    paths:
+      - "apps/flipt/**"
+      - ".github/workflows/flipt-validate.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate feature flag definitions
+        run: |
+          docker run --rm \
+            -v "$PWD/apps/flipt/flags:/flags" -w /flags \
+            docker.flipt.io/flipt/flipt:v2 /flipt validate
+
+      - name: Build Flipt image
+        run: docker build -t flipt-demo/flipt:ci ./apps/flipt

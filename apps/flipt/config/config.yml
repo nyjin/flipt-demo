@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flipt-io/flipt/main/config/flipt.schema.json
+#
+# Flipt v2 server configuration for the demo.
+#
+# dev / preview / prod are modeled as three Flipt v2 "environments" that all
+# live in a single git-native storage repository (mounted/baked at /flags).
+# Each environment reads its flags from its own sub-directory of that repo via
+# the `directory` field — this is Flipt v2's "environment per directory" model.
+#
+# Any value here can be overridden with env vars using the FLIPT_<SECTION>_<KEY>
+# pattern, e.g. FLIPT_LOG_LEVEL=debug.
+
+log:
+  level: INFO
+
+server:
+  protocol: http
+  host: 0.0.0.0
+  http_port: 8080 # REST API + UI + OFREP endpoint
+  grpc_port: 9000 # gRPC API
+
+environments:
+  dev:
+    name: dev
+    default: true # used when a client sends no X-Flipt-Environment header
+    storage: default
+    directory: dev
+  preview:
+    name: preview
+    storage: default
+    directory: preview
+  prod:
+    name: prod
+    storage: default
+    directory: prod
+
+storage:
+  default:
+    backend:
+      type: local # reads flags from a local git repository
+      path: /flags

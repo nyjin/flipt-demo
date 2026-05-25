@@ -1,0 +1,25 @@
+server:
+  port: 8081 # Flipt uses 8080; the backend listens on 8081
+
+spring:
+  application:
+    name: flipt-demo-backend
+  profiles:
+    default: dev # `dev` is used when no profile is set explicitly
+
+flipt:
+  # Base URL of the Flipt server. Override with FLIPT_URL (e.g. http://flipt:8080
+  # when running under docker-compose).
+  url: ${FLIPT_URL:http://localhost:8080}
+  namespace: ${FLIPT_NAMESPACE:default}
+  # `environment` is set per profile (see application-{dev,preview,prod}.yml).
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.example.fliptdemo: DEBUG

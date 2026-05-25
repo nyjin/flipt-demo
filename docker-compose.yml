@@ -1,0 +1,37 @@
+# Local orchestration for the Flipt feature-flag demo.
+#
+#   docker compose up --build            # run both Flipt and the backend
+#   docker compose up --build flipt      # run only Flipt (e.g. to use `gradlew bootRun` locally)
+#
+# Flipt UI:        http://localhost:8080
+# Backend API:     http://localhost:8081/api/...
+#
+# The backend defaults to the `dev` Flipt environment. Override SPRING_PROFILES_ACTIVE
+# (dev|preview|prod) to point it at a different environment.
+
+services:
+  flipt:
+    build:
+      context: ./apps/flipt
+    image: flipt-demo/flipt:local
+    ports:
+      - "8080:8080" # UI + REST + OFREP
+      - "9000:9000" # gRPC
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./apps/backend
+    image: flipt-demo/backend:local
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      FLIPT_URL: http://flipt:8080
+    depends_on:
+      flipt:
+        condition: service_healthy
