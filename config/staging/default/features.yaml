@@ -2,7 +2,7 @@ version: "1.4"
 namespace:
   key: default
   name: Default
-  description: Default namespace for the preview environment
+  description: Default namespace for the staging environment
 flags:
   - key: demo-api
     name: Demo API
@@ -12,5 +12,5 @@ flags:
   - key: beta-feature
     name: Beta Feature
     type: BOOLEAN_FLAG_TYPE
-    description: Toggles the GET /api/demo/beta endpoint (off in preview)
+    description: Toggles the GET /api/demo/beta endpoint (off in staging)
     enabled: false

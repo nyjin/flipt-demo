@@ -12,8 +12,13 @@
 services:
   flipt:
     build:
-      context: ./apps/flipt
+      context: . # repo root: the Dockerfile needs both config/ (flags) and apps/flipt/
+      dockerfile: apps/flipt/Dockerfile
     image: flipt-demo/flipt:local
+    # The dev/staging/prod environments clone their release/* branches from
+    # GitHub at startup (see apps/flipt/config/config.yml), so the container
+    # needs outbound internet access. fetch_policy is `lenient`, so Flipt still
+    # boots (serving the baked `local` env) even if GitHub is unreachable.
     ports:
       - "8080:8080" # UI + REST + OFREP
       - "9000:9000" # gRPC
@@ -22,6 +27,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 20s # allow time for the initial remote clone
 
   backend:
     build:

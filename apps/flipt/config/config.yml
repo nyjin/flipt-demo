@@ -2,10 +2,17 @@
 #
 # Flipt v2 server configuration for the demo.
 #
-# dev / preview / prod are modeled as three Flipt v2 "environments" that all
-# live in a single git-native storage repository (mounted/baked at /flags).
-# Each environment reads its flags from its own sub-directory of that repo via
-# the `directory` field — this is Flipt v2's "environment per directory" model.
+# Storage model (per environment "update trigger"):
+#   - local              : serves flags from a LOCAL git repo baked into the
+#                          image (/flags). Writable from the UI — for local dev.
+#   - dev/staging/prod   : each tracks a RELEASE BRANCH of the remote repo and
+#                          clones it into an in-memory git store. Read-only on
+#                          the server (no credentials) — changes flow via git
+#                          (GitOps): push to release/<env> and Flipt picks it up
+#                          within poll_interval, no restart needed.
+#
+# Each environment selects a sub-directory of its repo via `directory`
+# (config/<env>), so the existing config/{dev,staging,prod} layout is preserved.
 #
 # Any value here can be overridden with env vars using the FLIPT_<SECTION>_<KEY>
 # pattern, e.g. FLIPT_LOG_LEVEL=debug.
@@ -20,22 +27,51 @@ server:
   grpc_port: 9000 # gRPC API
 
 environments:
+  # Local-only environment: served from the baked git repo, freely editable in
+  # the UI. Marked default so header-less requests resolve offline (no network).
+  local:
+    name: local
+    default: true
+    storage: local
+    directory: config/dev # mirrors the dev folder by default
   dev:
     name: dev
-    default: true # used when a client sends no X-Flipt-Environment header
-    storage: default
-    directory: dev
-  preview:
-    name: preview
-    storage: default
-    directory: preview
+    storage: remote-dev
+    directory: config/dev
+  staging:
+    name: staging
+    storage: remote-staging
+    directory: config/staging
   prod:
     name: prod
-    storage: default
-    directory: prod
+    storage: remote-prod
+    directory: config/prod
 
 storage:
-  default:
+  # Local git repo baked into the image (see apps/flipt/Dockerfile).
+  local:
     backend:
-      type: local # reads flags from a local git repository
+      type: local
       path: /flags
+  # Remote release branches — cloned in-memory, polled, read-only on the server.
+  remote-dev:
+    remote: https://github.com/nyjin/flipt-demo.git
+    branch: release/dev
+    poll_interval: 30s
+    fetch_policy: lenient
+    backend:
+      type: memory
+  remote-staging:
+    remote: https://github.com/nyjin/flipt-demo.git
+    branch: release/staging
+    poll_interval: 30s
+    fetch_policy: lenient
+    backend:
+      type: memory
+  remote-prod:
+    remote: https://github.com/nyjin/flipt-demo.git
+    branch: release/prod
+    poll_interval: 30s
+    fetch_policy: lenient
+    backend:
+      type: memory

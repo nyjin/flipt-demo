@@ -1,0 +1,5 @@
+# Targets the Flipt `local` environment (served from the baked local git repo).
+# Use for local development against flags you can freely toggle in the Flipt UI:
+#   SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
+flipt:
+  environment: local

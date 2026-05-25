@@ -2,12 +2,16 @@ name: Flipt Validate
 
 on:
   push:
-    branches: [main]
+    # main holds the code + flag templates; release/* are the per-environment
+    # sources Flipt actually serves, so validate flag changes on all of them.
+    branches: [main, release/dev, release/staging, release/prod]
     paths:
+      - "config/**"
       - "apps/flipt/**"
       - ".github/workflows/flipt-validate.yml"
   pull_request:
     paths:
+      - "config/**"
       - "apps/flipt/**"
       - ".github/workflows/flipt-validate.yml"
 
@@ -20,8 +24,8 @@ jobs:
       - name: Validate feature flag definitions
         run: |
           docker run --rm \
-            -v "$PWD/apps/flipt/flags:/flags" -w /flags \
+            -v "$PWD/config:/flags" -w /flags \
             docker.flipt.io/flipt/flipt:v2 /flipt validate
 
       - name: Build Flipt image
-        run: docker build -t flipt-demo/flipt:ci ./apps/flipt
+        run: docker build -t flipt-demo/flipt:ci -f apps/flipt/Dockerfile .

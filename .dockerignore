@@ -1,0 +1,7 @@
+# Build context for the Flipt image is the repo root (see the flipt service in
+# docker-compose.yml). Only config/ and apps/flipt/ are needed; keep everything
+# else out of the context. (The backend image uses its own apps/backend context.)
+.git
+.github
+apps/backend
+*.md

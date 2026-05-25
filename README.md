@@ -5,7 +5,9 @@
 API를 동적으로 켜고 끄는 데모입니다.
 
 - 플래그 평가는 [OpenFeature](https://openfeature.dev) 표준 SDK + **OFREP** provider 로 수행합니다.
-- `dev` / `preview` / `prod` 를 Flipt v2 의 git-native **environments** 로 구성합니다.
+- Flipt v2 의 git-native **environments** 로 `local` + `dev` / `staging` / `prod` 를 구성합니다.
+  - `local` — 이미지에 baked 된 **로컬 git 저장소**. UI 에서 자유롭게 토글(로컬 개발용).
+  - `dev` / `staging` / `prod` — 원격 repo 의 **`release/*` 브랜치**를 추적(읽기전용·GitOps).
 - 같은 백엔드가 활성 Spring 프로파일에 따라 다른 Flipt 환경을 평가합니다.
 
 ## 아키텍처
@@ -22,14 +24,19 @@ API를 동적으로 켜고 끄는 데모입니다.
                          │    OpenFeature Client → OFREP provider   │
                          └──────────────────┬───────────────────────┘
                                             │ POST /ofrep/v1/evaluate/flags/{key}
-                                            │ X-Flipt-Environment: dev|preview|prod
+                                            │ X-Flipt-Environment: local|dev|staging|prod
                                             │ X-Flipt-Namespace: default
                                             ▼
-                         ┌─────────────────────────────────────────┐
-                         │  Flipt v2 server (apps/flipt)            │
-                         │  environments: dev / preview / prod      │
-                         │  storage: local git repo (/flags)        │
-                         └─────────────────────────────────────────┘
+                         ┌─────────────────────────────────────────────────────┐
+                         │  Flipt v2 server (apps/flipt)                        │
+                         │  local    → baked local git repo (/flags)            │
+                         │  dev       → remote git  release/dev     (memory)    │
+                         │  staging   → remote git  release/staging (memory)    │
+                         │  prod      → remote git  release/prod    (memory)    │
+                         └───────────────────────────┬─────────────────────────┘
+                                                     │ clone + poll (30s)
+                                                     ▼
+                                   github.com/nyjin/flipt-demo  (release/* 브랜치)
 
 플래그 ON  → 메서드 실행 → 200 OK
 플래그 OFF → FeatureDisabledException → 404 Not Found
@@ -40,22 +47,26 @@ API를 동적으로 켜고 끄는 데모입니다.
 ```
 flipt-demo/
 ├── docker-compose.yml          # Flipt + 백엔드 로컬 오케스트레이션
+├── config/                     # 선언형 플래그 (git-native), 환경별 디렉터리
+│   ├── dev/default/features.yaml
+│   ├── staging/default/features.yaml
+│   └── prod/default/features.yaml
 ├── apps/
 │   ├── flipt/                  # Flipt v2 서버
-│   │   ├── Dockerfile          # flipt:v2 이미지에 config/flags 주입
-│   │   ├── config/config.yml   # dev/preview/prod 환경 + local 스토리지
-│   │   └── flags/              # 선언형 플래그 (git-native)
-│   │       ├── dev/default/features.yaml
-│   │       ├── preview/default/features.yaml
-│   │       └── prod/default/features.yaml
+│   │   ├── Dockerfile          # local 환경용 config/(플래그) baked + 서버 설정 주입 (컨텍스트=레포 루트)
+│   │   └── config/config.yml   # 환경/스토리지 정의 (local=baked, dev/staging/prod=원격 release/*)
 │   └── backend/                # Spring Boot (Gradle Kotlin DSL, Java 21)
 │       ├── src/main/java/com/example/fliptdemo/
 │       │   ├── config/         # FliptProperties, OpenFeatureConfig
 │       │   ├── featureflag/    # @FeatureFlag, FeatureFlagAspect, 예외
 │       │   └── web/            # DemoController, GlobalExceptionHandler
-│       └── src/main/resources/ # application{,-dev,-preview,-prod}.yml
+│       └── src/main/resources/ # application{,-local,-dev,-staging,-prod}.yml
 └── .github/workflows/          # backend-ci, flipt-validate
 ```
+
+> 플래그 정의(`config/`)는 Flipt 앱 폴더와 분리되어 레포 최상위에 있습니다. `main` 에는 세 환경
+> 폴더가 모두 있지만, **실제 dev/staging/prod 가 서빙하는 소스는 각 `release/*` 브랜치**입니다
+> (아래 "환경" 참고). Flipt 서버 설정 `apps/flipt/config/config.yml` 과는 별개입니다.
 
 ## 요구 사항
 
@@ -78,18 +89,21 @@ API 호출 예시:
 # demo-api 플래그가 켜져 있으면 200
 curl -i http://localhost:8081/api/demo/hello
 
-# beta-feature: dev=ON, preview/prod=OFF
+# beta-feature: dev=ON, staging/prod=OFF
 curl -i http://localhost:8081/api/demo/beta
 
 # 플래그와 무관하게 항상 동작 (대조군)
 curl -i http://localhost:8081/api/health
 ```
 
-다른 환경으로 백엔드 실행:
+다른 환경으로 백엔드 실행 (해당 `release/*` 브랜치가 원격에 있어야 함):
 
 ```bash
-SPRING_PROFILES_ACTIVE=preview docker compose up --build backend
-SPRING_PROFILES_ACTIVE=prod    docker compose up --build backend
+SPRING_PROFILES_ACTIVE=staging docker compose up --build backend
+SPRING_PROFILES_ACTIVE=prod     docker compose up --build backend
+
+# 네트워크 없이 로컬 플래그만으로 개발하려면 local 환경
+SPRING_PROFILES_ACTIVE=local   docker compose up --build backend
 ```
 
 ## 컨트롤러 메서드 on/off 동작 방식
@@ -111,39 +125,52 @@ public Map<String, String> hello() { ... }
 
 ## 플래그 토글 방법
 
-### 방법 1 — Flipt UI (라이브, 권장)
+환경에 따라 방법이 다릅니다 — `local` 은 자유 편집, `dev`/`staging`/`prod` 는 GitOps.
 
-1. http://localhost:8080 접속
-2. 상단에서 환경(dev/preview/prod) 선택
-3. `demo-api` 또는 `beta-feature` 플래그의 Enabled 토글
-4. 즉시 반영 — 다시 `curl` 호출 시 200 ↔ 404 가 바뀜
+### local 환경 — Flipt UI (라이브)
 
-> Flipt UI 변경은 내부 git 저장소에 커밋되어 즉시 서빙됩니다.
+1. http://localhost:8080 접속, 상단에서 **`local`** 환경 선택
+2. `demo-api` 또는 `beta-feature` 의 Enabled 토글 → 즉시 반영(다시 `curl` 시 200 ↔ 404)
 
-### 방법 2 — 선언형 파일 수정 (GitOps)
+> `local` 은 쓰기 가능한 baked git 저장소라 UI 변경이 즉시 커밋·서빙됩니다. 파일을 직접
+> 고쳤다면 `docker compose up -d --build flipt` 로 재빌드하세요.
 
-`apps/flipt/flags/<env>/default/features.yaml` 의 `enabled` 값을 바꾼 뒤 Flipt 를 재시작:
+### dev / staging / prod — GitOps (`release/*` 브랜치 push)
+
+이 세 환경은 원격 `release/*` 브랜치를 추적하는 **읽기전용**입니다(서버 UI 토글 불가). 플래그를
+바꾸려면 해당 브랜치의 `config/<env>/default/features.yaml` 를 수정해 push 하면, Flipt 가
+`poll_interval`(30s) 내에 **재시작 없이** 가져옵니다.
 
 ```bash
-# 예: dev 의 demo-api 를 끄기 → enabled: false 로 수정 후
-docker compose up -d --build flipt
+# 예: dev 환경의 beta-feature 끄기
+git switch release/dev
+# config/dev/default/features.yaml 에서 beta-feature 의 enabled: false 로 수정
+git commit -am "dev: disable beta-feature" && git push
+
+# 약 30초 내 자동 반영 (flipt 재시작 불필요)
+curl -i http://localhost:8081/api/demo/beta
 ```
 
-> local 스토리지 백엔드는 시작 시점의 git 커밋을 읽으므로, 파일 수정 후에는 재빌드/재시작이
-> 필요합니다(또는 위 UI 방식 사용).
+> **승급(promotion)** 은 같은 변경을 상위 환경 브랜치로 올리는 것입니다:
+> `release/dev` → `release/staging` → `release/prod`. 변경 이력·리뷰(PR)·롤백(`git revert`)이
+> 모두 git 에 남습니다. 읽기전용이라 자격증명 없이도 안전합니다.
 
-## 환경(dev / preview / prod)
+## 환경(local / dev / staging / prod)
 
-`apps/flipt/config/config.yml` 에서 세 환경을 하나의 git 저장소(`/flags`) 안의 서로 다른
-디렉터리로 매핑합니다(Flipt v2 의 "environment per directory" 모델).
+`apps/flipt/config/config.yml` 에서 환경마다 **스토리지**를 다르게 매핑합니다. `local` 은
+이미지에 baked 된 로컬 git 저장소를, `dev`/`staging`/`prod` 는 원격 repo 의 `release/*`
+브랜치를 각각 추적합니다(모두 `directory: config/<env>` 로 폴더 매핑).
 
-| 환경    | Flipt directory | 백엔드 프로파일 | beta-feature 시드 |
-| ------- | --------------- | --------------- | ----------------- |
-| dev     | `dev/`          | `dev` (기본)    | ON                |
-| preview | `preview/`      | `preview`       | OFF               |
-| prod    | `prod/`         | `prod`          | OFF               |
+| 환경    | 스토리지 소스                         | backend  | 백엔드 프로파일 | directory        |
+| ------- | ------------------------------------- | -------- | --------------- | ---------------- |
+| local   | baked 로컬 git (`/flags`)             | `local`  | `local`         | `config/dev`     |
+| dev     | 원격 `release/dev` 브랜치             | `memory` | `dev` (기본)    | `config/dev`     |
+| staging | 원격 `release/staging` 브랜치         | `memory` | `staging`       | `config/staging` |
+| prod    | 원격 `release/prod` 브랜치            | `memory` | `prod`          | `config/prod`    |
 
-백엔드는 `X-Flipt-Environment` 헤더로 환경을 선택합니다(프로파일별 `application-*.yml` 참고).
+- `local` 은 `default: true` — `X-Flipt-Environment` 헤더가 없으면(또는 오프라인) 이 환경으로 평가됩니다.
+- `dev`/`staging`/`prod` 는 `type: memory` 라 재시작마다 원격에서 fresh 하게 clone 되며 서버 UI 로는 수정 불가(GitOps 전용)입니다.
+- 백엔드는 `X-Flipt-Environment` 헤더로 환경을 선택합니다(프로파일별 `application-*.yml` 참고).
 
 ## 백엔드를 로컬에서 직접 실행
 
@@ -155,8 +182,9 @@ docker compose up --build flipt
 cd apps/backend
 ./gradlew bootRun
 
-# 다른 환경
-SPRING_PROFILES_ACTIVE=preview ./gradlew bootRun
+# 다른 환경 (staging/prod 는 해당 release/* 브랜치 필요, local 은 오프라인 가능)
+SPRING_PROFILES_ACTIVE=local   ./gradlew bootRun
+SPRING_PROFILES_ACTIVE=staging ./gradlew bootRun
 
 # 테스트
 ./gradlew test
@@ -189,81 +217,64 @@ cd apps/backend
 
 ### git-native 동작 검증
 
-Flipt v2 의 `local` 스토리지는 `/flags` 를 **실제 git 저장소**로 다룹니다
-("플래그 = 선언형 파일", "변경 = git 커밋"). 아래처럼 단계별로 검증할 수 있습니다.
+Flipt v2 는 모든 스토리지가 git 기반입니다. `local` 은 이미지에 baked 된 git 저장소를,
+`dev`/`staging`/`prod` 는 원격 `release/*` 브랜치를 in-memory 로 clone 해 서빙합니다.
 
 | 검증 대상 | 방법 |
 | --- | --- |
 | 선언형 플래그 유효성 | `flipt validate` (CI 에서도 사용) |
-| 저장소가 진짜 git repo 인지 | 컨테이너의 `/flags/.git` 존재 확인 |
-| 환경별 디렉터리 격리 | env 별 OFREP 평가 비교 |
-| **커밋이 플래그 상태를 결정** | 커밋 → flipt 재시작 → 재평가 |
-| 롤백 | `git revert` → 재시작 → 재평가 |
+| `local` 이 git repo 인지 | 컨테이너의 `/flags/.git` 존재 확인(추적 파일은 `config/<env>/...`) |
+| 환경별 평가 | `local`/`dev`/`staging`/`prod` 별 OFREP 비교 |
+| **원격 브랜치 = 단일 소스** | `release/<env>` push → poll 내 **재시작 없이** 반영 |
+| 롤백 | `git revert` 후 push → 자동 반영 |
 
-**1) 선언형 검증 + 저장소/격리 확인**
+**1) 선언형 검증 + 환경별 평가**
 
 ```bash
 # 플래그 YAML 검증
-docker run --rm -v "$PWD/apps/flipt/flags:/flags" -w /flags \
+docker run --rm -v "$PWD/config:/flags" -w /flags \
   docker.flipt.io/flipt/flipt:v2 /flipt validate
 
-# Flipt 기동 후, /flags 가 git repo 인지 + 환경별 격리 확인
+# Flipt 기동 후 환경별 평가 (dev/staging/prod 는 release/* 브랜치가 원격에 있어야 함)
 docker compose up -d --build flipt
-docker compose exec flipt ls -la /flags/.git          # objects/refs/HEAD 등 존재
-for env in dev preview prod; do
+for env in local dev staging prod; do
   printf '%-8s ' "$env:"
   curl -s -X POST http://localhost:8080/ofrep/v1/evaluate/flags/beta-feature \
     -H 'Content-Type: application/json' \
     -H "X-Flipt-Environment: $env" -H 'X-Flipt-Namespace: default' -d '{}'; echo
 done
-# dev => value:true,  preview/prod => value:false
+# local/dev => value:true,  staging/prod => value:false
 ```
 
-**2) GitOps 라운드트립 — "git 커밋이 플래그 상태를 결정한다"**
-
-데모는 플래그를 이미지에 굽기 때문에, 라운드트립은 별도 git repo 를 bind-mount 해
-검증합니다(기존 스택은 그대로 둔 채 8090 포트 사용):
+**2) 원격 GitOps 트리거 — "`release/<env>` push 가 단일 소스" (flipt 재시작 불필요)**
 
 ```bash
-# 1. 호스트에 git repo 생성 (flipt 유저 uid 100 이 읽도록 권한 부여)
-REPO="$(mktemp -d)/repo"; mkdir -p "$REPO"
-cp -R apps/flipt/flags/. "$REPO/"
-git -C "$REPO" init -q -b main && git -C "$REPO" add . && git -C "$REPO" commit -qm seed
-chmod -R a+rwX "$REPO"
-
-# 2. bind-mount 로 flipt 기동
-docker run -d --name flipt-gitnative -p 8090:8080 \
-  -v "$REPO:/flags" \
-  -v "$PWD/apps/flipt/config/config.yml:/etc/flipt/config/default.yml:ro" \
-  docker.flipt.io/flipt/flipt:v2
-
-eval_demo() { curl -s -X POST http://localhost:8090/ofrep/v1/evaluate/flags/demo-api \
+eval_dev() { curl -s -X POST http://localhost:8080/ofrep/v1/evaluate/flags/beta-feature \
   -H 'Content-Type: application/json' \
   -H 'X-Flipt-Environment: dev' -H 'X-Flipt-Namespace: default' -d '{}'; echo; }
 
-sleep 3; eval_demo            # => value:true
+eval_dev                       # => value:true
 
-# 3. demo-api 만 끄도록 커밋 후 재시작 → 평가가 false 로 바뀜 (커밋이 상태를 결정)
-sed -i '' '/key: demo-api/,/enabled:/ s/enabled: true/enabled: false/' \
-  "$REPO/dev/default/features.yaml"        # Linux 는 sed -i (빈 따옴표 제거)
-git -C "$REPO" commit -aqm "disable demo-api in dev"
-docker restart flipt-gitnative; sleep 3
-eval_demo                     # => value:false
+# release/dev 브랜치에서 beta-feature 끄고 push
+git switch release/dev
+sed -i '' '/key: beta-feature/,/enabled:/ s/enabled: true/enabled: false/' \
+  config/dev/default/features.yaml          # Linux 는 sed -i (빈 따옴표 제거)
+git commit -am "dev: disable beta-feature" && git push
+git switch -                                 # 원래 브랜치로 복귀
 
-# 4. 롤백: git revert 로 되돌리면 다시 true
-git -C "$REPO" revert --no-edit HEAD
-docker restart flipt-gitnative; sleep 3
-eval_demo                     # => value:true
+# poll_interval(30s) 대기 후 재평가 — flipt 재시작 없이 false 로 바뀜
+sleep 35; eval_dev             # => value:false
 
-# 5. 정리
-docker rm -f flipt-gitnative; rm -rf "$(dirname "$REPO")"
+# 롤백: 되돌려 push 하면 다시 true (poll 후)
+git switch release/dev && git revert --no-edit HEAD && git push && git switch -
+sleep 35; eval_dev             # => value:true
 ```
 
-> `local` 백엔드는 **시작 시점의 git HEAD** 를 읽으므로, 외부에서 만든 커밋을 반영하려면
-> 재시작이 필요합니다. 반대로 **Flipt UI 토글**은 즉시 서빙되며 내부 git 에 자동
-> 커밋됩니다(write→commit).
+> `local`(baked) 은 시작 시점의 git HEAD 를 읽어 파일 수정 시 재빌드가 필요하지만, 원격
+> 환경은 `poll_interval` 마다 브랜치를 다시 가져오므로 **push 만으로 자동 반영**됩니다. 서버
+> UI 로는 원격 환경을 수정할 수 없어(자격증명 없음) git 이 단일 소스로 유지됩니다.
 
 ## CI (GitHub Actions)
 
 - **backend-ci** — `apps/backend` 변경 시 JDK 21 로 `./gradlew build`(컴파일 + 테스트).
-- **flipt-validate** — `apps/flipt` 변경 시 `flipt validate` 로 플래그 YAML 검증 + Flipt 이미지 빌드.
+- **flipt-validate** — `config/**`·`apps/flipt/**` 변경 시(`main` 및 `release/*` 브랜치) `flipt validate` 로 플래그 YAML 검증 + Flipt 이미지 빌드.
