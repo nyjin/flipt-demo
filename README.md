@@ -55,7 +55,7 @@ flipt-demo/
 │   ├── flipt/                  # Flipt v2 서버
 │   │   ├── Dockerfile          # local 환경용 config/(플래그) baked + 서버 설정 주입 (컨텍스트=레포 루트)
 │   │   └── config/config.yml   # 환경/스토리지 정의 (local=baked, dev/staging/prod=원격 release/*)
-│   └── backend/                # Spring Boot (Gradle Kotlin DSL, Java 21)
+│   └── backend/                # Spring Boot (Gradle Kotlin DSL, Java 25)
 │       ├── src/main/java/com/example/fliptdemo/
 │       │   ├── config/         # FliptProperties, OpenFeatureConfig
 │       │   ├── featureflag/    # @FeatureFlag, FeatureFlagAspect, 예외
@@ -71,7 +71,7 @@ flipt-demo/
 ## 요구 사항
 
 - Docker / Docker Compose (Flipt 실행 및 빌드)
-- (선택) 로컬에서 백엔드를 직접 구동할 경우 JDK 21 — 없어도 Gradle 툴체인이 자동 설치합니다.
+- (선택) 로컬에서 백엔드를 직접 구동할 경우 JDK 25 — 없어도 Gradle 툴체인이 자동 설치합니다.
 
 ## 빠른 시작
 
@@ -276,5 +276,5 @@ sleep 35; eval_dev             # => value:true
 
 ## CI (GitHub Actions)
 
-- **backend-ci** — `apps/backend` 변경 시 JDK 21 로 `./gradlew build`(컴파일 + 테스트).
+- **backend-ci** — `apps/backend` 변경 시 JDK 25 로 `./gradlew build`(컴파일 + 테스트).
 - **flipt-validate** — `config/**`·`apps/flipt/**` 변경 시(`main` 및 `release/*` 브랜치) `flipt validate` 로 플래그 YAML 검증 + Flipt 이미지 빌드.
