@@ -1,7 +1,6 @@
 package com.example.fliptdemo.featureflag;
 
 import dev.openfeature.sdk.Client;
-import dev.openfeature.sdk.MutableContext;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -29,8 +28,10 @@ public class FeatureFlagAspect {
     @Around("@annotation(featureFlag)")
     public Object evaluate(ProceedingJoinPoint joinPoint, FeatureFlag featureFlag) throws Throwable {
         String flagKey = featureFlag.value();
+        // Evaluate with the per-request user context so gated flags also honour
+        // targeting/segment rules and percentage rollout (not just on/off).
         boolean enabled = featureClient.getBooleanValue(
-                flagKey, featureFlag.fallback(), new MutableContext());
+                flagKey, featureFlag.fallback(), RequestUserContext.current().toEvaluationContext());
 
         if (!enabled) {
             log.debug("Feature '{}' is disabled — blocking {}", flagKey, joinPoint.getSignature());

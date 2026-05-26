@@ -167,6 +167,61 @@ FLIPT_MODE=ofrep docker compose up --build backend
 > in-memory 모드도 Flipt 서버가 필요합니다(스냅샷을 받아옴). 평가만 백엔드 메모리에서 일어나므로,
 > 스냅샷을 한 번 받은 뒤에는 Flipt 서버가 잠시 끊겨도 평가가 계속됩니다(폴링 갱신만 지연).
 
+## 시나리오: Multivariate · 세그먼트 타겟팅 · 퍼센트 롤아웃
+
+단순 on/off(`@FeatureFlag`) 외에, 세 가지 고급 시나리오를 **평가 결과를 그대로 반환**하는 엔드포인트로
+시연합니다. 사용자 컨텍스트는 HTTP 헤더로 전달합니다.
+
+| 헤더 | 용도 | 기본값 |
+| --- | --- | --- |
+| `X-User-Id` | 퍼센트 롤아웃 버킷팅 엔티티(같은 id = 일관된 결과) | `anonymous` |
+| `X-User-Tier` | 세그먼트 타겟팅 속성(예: `premium`) | (없음) |
+| `X-User-Country` | 추가 타겟팅 속성 | (없음) |
+
+Flipt(`/api/demo/*`)와 GrowthBook(`/api/growthbook/*`)이 1:1로 대응합니다. 응답은
+`{flag, enabled|variant, reason, userId, attributes, provider}` 형태입니다.
+
+| 시나리오 | 플래그 | Flipt | GrowthBook |
+| --- | --- | --- | --- |
+| Multivariate | `ui-theme` | `GET /api/demo/variant` | `GET /api/growthbook/variant` |
+| 세그먼트 타겟팅 | `premium-feature` | `GET /api/demo/targeted` | `GET /api/growthbook/targeted` |
+| 퍼센트 롤아웃 | `gradual-rollout` | `GET /api/demo/rollout` | `GET /api/growthbook/rollout` |
+
+```bash
+# Multivariate — userId 해시로 control/treatment 분배 (dev=50/50)
+curl -s localhost:8081/api/demo/variant -H 'X-User-Id: u1'
+# => {"provider":"flipt","flag":"ui-theme","variant":"treatment","reason":"MATCH_EVALUATION_REASON",...}
+
+# 세그먼트 타겟팅 — tier=premium 만 on
+curl -s localhost:8081/api/demo/targeted -H 'X-User-Tier: premium'   # enabled=true
+curl -s localhost:8081/api/demo/targeted -H 'X-User-Tier: free'      # enabled=false
+
+# 퍼센트 롤아웃 — 같은 userId 는 항상 동일, 전체적으로 ~50%(dev)
+for u in $(seq 1 20); do curl -s localhost:8081/api/demo/rollout -H "X-User-Id: user-$u"; echo; done
+```
+
+> 환경별 비중: variant `treatment` 와 롤아웃 %가 **dev > staging > prod**로 줄어듭니다
+> (variant treatment 50/20/10%, rollout 50/20/10%) — `config/<env>/default/features.yaml` 참고.
+> 이 데모 백엔드는 기본 `dev` 프로파일이 원격 `release/dev`를 평가하므로, 로컬에서 새 플래그를
+> 바로 보려면 `SPRING_PROFILES_ACTIVE=local`(baked `config/dev`)로 실행하세요.
+
+### Flipt 정의 (git-native, 즉시 동작)
+
+`config/<env>/default/features.yaml`에 선언형으로 존재합니다 — `ui-theme`(`VARIANT_FLAG_TYPE`,
+variants+rules+distributions), `premium-feature`(`rollouts` segment `premium-tier`),
+`gradual-rollout`(`rollouts` threshold). 추가 셋업 없이 동작합니다. boolean 타겟팅/롤아웃 플래그는
+기본값을 off(`enabled: false`)로 두고 룰이 on으로 올립니다.
+
+### GrowthBook 정의 (UI → MongoDB, 수동 셋업)
+
+GrowthBook은 git config가 없으므로 **동일 키를 UI에서 생성**해야 시연됩니다(키 없으면 fallback=off/control):
+
+1. Features에서 `ui-theme`(String, control/treatment), `premium-feature`(Boolean), `gradual-rollout`(Boolean) 생성
+2. `premium-feature` 타겟팅 룰: `tier == premium → ON`
+3. `gradual-rollout` percentage rollout 50% (hash attribute `id`)
+4. `ui-theme` experiment/rollout으로 control/treatment 분배
+5. SDK 키 주입(아래 "GrowthBook 셋업") 후 `/api/growthbook/{variant,targeted,rollout}`로 비교
+
 ## 플래그 토글 방법
 
 환경에 따라 방법이 다릅니다 — `local` 은 자유 편집, `dev`/`staging`/`prod` 는 GitOps.

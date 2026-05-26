@@ -14,3 +14,55 @@ flags:
     type: BOOLEAN_FLAG_TYPE
     description: Toggles the GET /api/demo/beta endpoint (on in dev only)
     enabled: true
+  # --- 시나리오 데모 플래그 -------------------------------------------------
+  # Multivariate: GET /api/demo/variant 가 control/treatment 중 하나를 반환.
+  - key: ui-theme
+    name: UI Theme
+    type: VARIANT_FLAG_TYPE
+    description: Multivariate flag — control/treatment 분배 (variant 시나리오)
+    enabled: true
+    variants:
+      - key: control
+        name: Control
+      - key: treatment
+        name: Treatment
+    rules:
+      - segment: all-users
+        distributions:
+          - variant: control
+            rollout: 50
+          - variant: treatment
+            rollout: 50
+  # 세그먼트 타겟팅: tier=premium 인 요청에만 on (GET /api/demo/targeted).
+  - key: premium-feature
+    name: Premium Feature
+    type: BOOLEAN_FLAG_TYPE
+    description: Segment 타겟팅 — tier=premium 에게만 on (targeting 시나리오)
+    enabled: false # 기본 off; premium-tier 세그먼트에 매칭되면 on
+    rollouts:
+      - segment:
+          key: premium-tier
+          value: true
+  # 퍼센트 롤아웃: entityId(X-User-Id) 해시로 50% on (GET /api/demo/rollout).
+  - key: gradual-rollout
+    name: Gradual Rollout
+    type: BOOLEAN_FLAG_TYPE
+    description: 퍼센트 롤아웃 — 50% (rollout 시나리오)
+    enabled: false # 기본 off; 50% 버킷에 들면 on
+    rollouts:
+      - threshold:
+          percentage: 50
+          value: true
+segments:
+  # 제약 없는 세그먼트 = 모든 엔티티 매칭 (variant 분배 룰의 대상).
+  - key: all-users
+    name: All Users
+    match_type: ALL_MATCH_TYPE
+  - key: premium-tier
+    name: Premium Tier
+    match_type: ALL_MATCH_TYPE
+    constraints:
+      - type: STRING_COMPARISON_TYPE
+        property: tier
+        operator: eq
+        value: premium

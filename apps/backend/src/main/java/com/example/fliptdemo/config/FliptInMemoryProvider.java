@@ -8,6 +8,8 @@ import dev.openfeature.sdk.ProviderEvaluation;
 import dev.openfeature.sdk.Value;
 import io.flipt.client.FliptClient;
 import io.flipt.client.models.BooleanEvaluationResponse;
+import io.flipt.client.models.VariantEvaluationResponse;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,9 +22,12 @@ import org.slf4j.LoggerFactory;
  * abstraction the OFREP path uses.
  *
  * <p>This is the in-memory counterpart to the OFREP provider; which one is active
- * is chosen by {@code flipt.mode} in {@link OpenFeatureConfig}. The demo only gates
- * on boolean flags, so only {@link #getBooleanEvaluation} talks to Flipt; the other
- * types degrade to the supplied default.
+ * is chosen by {@code flipt.mode} in {@link OpenFeatureConfig}. Boolean flags
+ * (on/off, targeting, percentage rollout) go through {@link #getBooleanEvaluation};
+ * multivariate flags go through {@link #getStringEvaluation} (returns the variant
+ * key). Both pass the OpenFeature context's targetingKey as the Flipt entity id
+ * (rollout bucketing) and its attributes as the Flipt evaluation context (segment
+ * matching). Integer/Double/Object types are unused by the demo and degrade to the default.
  *
  * <p>The provider is resilient: if the client never initialised (e.g. Flipt was
  * unreachable at startup) or an evaluation throws, it returns the caller's default
@@ -56,7 +61,7 @@ public class FliptInMemoryProvider implements FeatureProvider {
             return fallback(defaultValue, "Flipt client-side SDK unavailable", ErrorCode.PROVIDER_NOT_READY);
         }
         try {
-            BooleanEvaluationResponse resp = client.evaluateBoolean(key, entityId(ctx), Map.of());
+            BooleanEvaluationResponse resp = client.evaluateBoolean(key, entityId(ctx), attributes(ctx));
             return ProviderEvaluation.<Boolean>builder()
                     .value(resp.isEnabled())
                     .reason(resp.getReason())
@@ -74,15 +79,43 @@ public class FliptInMemoryProvider implements FeatureProvider {
         return DEFAULT_ENTITY_ID;
     }
 
+    /** OpenFeature attributes → Flipt string context (used for segment matching). */
+    private static Map<String, String> attributes(EvaluationContext ctx) {
+        Map<String, String> attrs = new LinkedHashMap<>();
+        if (ctx != null) {
+            ctx.asMap().forEach((k, v) -> {
+                if (v != null && !"targetingKey".equals(k)) {
+                    attrs.put(k, v.isString() ? v.asString() : String.valueOf(v.asObject()));
+                }
+            });
+        }
+        return attrs;
+    }
+
     private static ProviderEvaluation<Boolean> fallback(Boolean value, String reason, ErrorCode code) {
         return ProviderEvaluation.<Boolean>builder().value(value).reason(reason).errorCode(code).build();
     }
 
-    // The demo only gates on boolean flags. For the other value types, degrade to
-    // the supplied default so the provider never throws on an unsupported request.
+    /** Multivariate flags: returns the Flipt variant key (e.g. control/treatment). */
     @Override
     public ProviderEvaluation<String> getStringEvaluation(String key, String def, EvaluationContext ctx) {
-        return unsupported(def);
+        if (client == null) {
+            return ProviderEvaluation.<String>builder()
+                    .value(def).reason("Flipt client-side SDK unavailable").errorCode(ErrorCode.PROVIDER_NOT_READY).build();
+        }
+        try {
+            VariantEvaluationResponse resp = client.evaluateVariant(key, entityId(ctx), attributes(ctx));
+            String variant = resp.getVariantKey();
+            return ProviderEvaluation.<String>builder()
+                    .value(variant != null && !variant.isBlank() ? variant : def)
+                    .variant(variant)
+                    .reason(resp.getReason())
+                    .build();
+        } catch (RuntimeException e) {
+            log.warn("Flipt in-memory variant evaluation of '{}' failed — using fallback", key, e);
+            return ProviderEvaluation.<String>builder()
+                    .value(def).reason("evaluation error").errorCode(ErrorCode.GENERAL).build();
+        }
     }
 
     @Override

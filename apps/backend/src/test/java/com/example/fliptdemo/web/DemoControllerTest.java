@@ -8,7 +8,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.mockito.ArgumentMatchers.anyString;
+
 import dev.openfeature.sdk.Client;
+import dev.openfeature.sdk.FlagEvaluationDetails;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -57,5 +60,32 @@ class DemoControllerTest {
         mockMvc.perform(get("/api/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void variantReturnsResolvedVariant() throws Exception {
+        FlagEvaluationDetails<String> details = new FlagEvaluationDetails<>();
+        details.setValue("treatment");
+        details.setReason("TARGETING_MATCH");
+        when(featureClient.getStringDetails(eq("ui-theme"), anyString(), any())).thenReturn(details);
+
+        mockMvc.perform(get("/api/demo/variant").header("X-User-Id", "u1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flag").value("ui-theme"))
+                .andExpect(jsonPath("$.variant").value("treatment"))
+                .andExpect(jsonPath("$.userId").value("u1"));
+    }
+
+    @Test
+    void targetedReflectsEvaluationResult() throws Exception {
+        FlagEvaluationDetails<Boolean> details = new FlagEvaluationDetails<>();
+        details.setValue(true);
+        details.setReason("TARGETING_MATCH");
+        when(featureClient.getBooleanDetails(eq("premium-feature"), any(), any())).thenReturn(details);
+
+        mockMvc.perform(get("/api/demo/targeted").header("X-User-Tier", "premium"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.attributes.tier").value("premium"));
     }
 }

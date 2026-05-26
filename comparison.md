@@ -367,6 +367,12 @@ sequenceDiagram
 | 실시간 갱신 | ✅ SSE 스트리밍(OSS, 서버 내장) / poll | ✅ SSE(self-host는 **Proxy 필요**) / SWR |
 | 데이터 웨어하우스 연동 | ❌ | ✅ (실험 분석용) |
 
+> **이 데모에서의 시연** — 위 세 행(Boolean/Multivariate · 세그먼트/타겟팅 · 퍼센트 롤아웃)은
+> 백엔드 엔드포인트로 직접 확인할 수 있습니다(평가 결과 반환, `X-User-Id`/`X-User-Tier` 헤더):
+> `/{demo,growthbook}/variant`(ui-theme) · `/targeted`(premium-feature) · `/rollout`(gradual-rollout).
+> **Flipt는 `config/<env>/features.yaml`에 선언해 즉시 동작**(검증: variant 50/50, premium만 on,
+> 롤아웃 ~50%, 같은 userId 일관), **GrowthBook은 동일 키를 UI에서 생성**해야 시연됩니다(README 참고).
+
 ## Admin · 거버넌스 기능 비교
 
 위 표가 "플래그 평가/배포" 기능이라면, 여기서는 **운영 콘솔에서 제공하는 관리·거버넌스 기능**을

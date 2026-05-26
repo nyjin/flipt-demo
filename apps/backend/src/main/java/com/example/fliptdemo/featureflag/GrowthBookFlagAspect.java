@@ -21,10 +21,6 @@ public class GrowthBookFlagAspect {
 
     private static final Logger log = LoggerFactory.getLogger(GrowthBookFlagAspect.class);
 
-    // Minimal demo user. GrowthBook needs attributes for targeting/experiments;
-    // for the simple on/off flags in this demo a stable id is enough.
-    private static final String DEMO_USER_ATTRIBUTES = "{\"id\": \"demo-user\"}";
-
     private final GrowthBookClient growthBookClient;
 
     public GrowthBookFlagAspect(GrowthBookClient growthBookClient) {
@@ -34,8 +30,9 @@ public class GrowthBookFlagAspect {
     @Around("@annotation(growthBookFlag)")
     public Object evaluate(ProceedingJoinPoint joinPoint, GrowthBookFlag growthBookFlag) throws Throwable {
         String flagKey = growthBookFlag.value();
+        // Per-request user attributes so gated flags also honour targeting/rollout.
         UserContext user = UserContext.builder()
-                .attributesJson(DEMO_USER_ATTRIBUTES)
+                .attributesJson(RequestUserContext.current().toAttributesJson())
                 .build();
 
         Boolean enabled = growthBookClient.getFeatureValue(

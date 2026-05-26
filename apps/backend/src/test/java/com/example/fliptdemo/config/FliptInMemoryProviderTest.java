@@ -11,6 +11,7 @@ import dev.openfeature.sdk.ImmutableContext;
 import dev.openfeature.sdk.ProviderEvaluation;
 import io.flipt.client.FliptClient;
 import io.flipt.client.models.BooleanEvaluationResponse;
+import io.flipt.client.models.VariantEvaluationResponse;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -52,5 +53,28 @@ class FliptInMemoryProviderTest {
 
         assertThat(eval.getValue()).isFalse();
         assertThat(eval.getErrorCode()).isEqualTo(ErrorCode.GENERAL);
+    }
+
+    @Test
+    void returnsVariantKeyFromFliptClient() {
+        FliptClient client = mock(FliptClient.class);
+        VariantEvaluationResponse resp = VariantEvaluationResponse.builder()
+                .variantKey("treatment").reason("MATCH_EVALUATION_REASON").match(true).build();
+        when(client.evaluateVariant(eq("ui-theme"), any(), any())).thenReturn(resp);
+
+        ProviderEvaluation<String> eval = new FliptInMemoryProvider(client)
+                .getStringEvaluation("ui-theme", "control", new ImmutableContext());
+
+        assertThat(eval.getValue()).isEqualTo("treatment");
+        assertThat(eval.getVariant()).isEqualTo("treatment");
+    }
+
+    @Test
+    void variantFallsBackWhenClientUnavailable() {
+        ProviderEvaluation<String> eval = new FliptInMemoryProvider(null)
+                .getStringEvaluation("ui-theme", "control", new ImmutableContext());
+
+        assertThat(eval.getValue()).isEqualTo("control");
+        assertThat(eval.getErrorCode()).isEqualTo(ErrorCode.PROVIDER_NOT_READY);
     }
 }
