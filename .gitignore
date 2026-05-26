@@ -20,3 +20,6 @@
 
 # Spring Boot
 HELP.md
+
+# Local env (GrowthBook SDK key / secrets) — keep .env.example committed
+.env

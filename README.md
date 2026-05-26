@@ -4,28 +4,36 @@
 **Spring Boot 백엔드**가 컨트롤러 메서드에 붙인 `@FeatureFlag` 어노테이션만으로 특정
 API를 동적으로 켜고 끄는 데모입니다.
 
-- 플래그 평가는 [OpenFeature](https://openfeature.dev) 표준 SDK + **OFREP** provider 로 수행합니다.
+- 플래그 평가는 [OpenFeature](https://openfeature.dev) `Client` 추상화로 수행합니다 — **기본은 Flipt
+  client-side SDK(`flipt-client-java`)로 in-memory 평가**, `flipt.mode=ofrep` 로 **OFREP(서버 사이드)
+  평가**로도 전환 가능합니다(아래 ["Flipt 평가 방식"](#flipt-평가-방식--in-memory기본--ofrep) 참고).
 - Flipt v2 의 git-native **environments** 로 `local` + `dev` / `staging` / `prod` 를 구성합니다.
   - `local` — 이미지에 baked 된 **로컬 git 저장소**. UI 에서 자유롭게 토글(로컬 개발용).
   - `dev` / `staging` / `prod` — 원격 repo 의 **`release/*` 브랜치**를 추적(읽기전용·GitOps).
 - 같은 백엔드가 활성 Spring 프로파일에 따라 다른 Flipt 환경을 평가합니다.
+- 비교를 위해 [GrowthBook](https://www.growthbook.io) 을 **self-host**(+ MongoDB) 로 함께 띄우고,
+  같은 플래그 키를 GrowthBook 네이티브 Java SDK 로 평가하는 `/api/growthbook/*` 엔드포인트를
+  Flipt 의 `/api/demo/*` 와 1:1 로 제공합니다 — 아래 ["GrowthBook 비교"](#growthbook-비교) 참고.
 
 ## 아키텍처
 
 ```
-                         ┌─────────────────────────────────────────┐
-  GET /api/demo/hello    │  Spring Boot backend (apps/backend)      │
-  ────────────────────▶  │                                          │
-                         │  DemoController                          │
-                         │    @FeatureFlag("demo-api")  ◀── 어노테이션 │
-                         │          │                               │
-                         │          ▼                               │
-                         │  FeatureFlagAspect (AOP)                 │
-                         │    OpenFeature Client → OFREP provider   │
-                         └──────────────────┬───────────────────────┘
-                                            │ POST /ofrep/v1/evaluate/flags/{key}
+                         ┌───────────────────────────────────────────────┐
+  GET /api/demo/hello    │  Spring Boot backend (apps/backend)            │
+  ────────────────────▶  │                                                │
+                         │  DemoController                                │
+                         │    @FeatureFlag("demo-api")  ◀── 어노테이션      │
+                         │          │                                     │
+                         │          ▼                                     │
+                         │  FeatureFlagAspect (AOP)                       │
+                         │    OpenFeature Client                          │
+                         │      ├─ (기본) FliptInMemoryProvider            │
+                         │      │     → flipt-client-java (in-memory)      │
+                         │      └─ (flipt.mode=ofrep) OFREP provider       │
+                         └──────────────────┬─────────────────────────────┘
+                                            │ 기본 : 기동 시 스냅샷 fetch + 폴링(30s) → 이후 평가는 JVM 메모리
+                                            │ ofrep: POST /ofrep/v1/evaluate/flags/{key} (평가마다 호출)
                                             │ X-Flipt-Environment: local|dev|staging|prod
-                                            │ X-Flipt-Namespace: default
                                             ▼
                          ┌─────────────────────────────────────────────────────┐
                          │  Flipt v2 server (apps/flipt)                        │
@@ -46,7 +54,8 @@ API를 동적으로 켜고 끄는 데모입니다.
 
 ```
 flipt-demo/
-├── docker-compose.yml          # Flipt + 백엔드 로컬 오케스트레이션
+├── docker-compose.yml          # Flipt + GrowthBook(+ MongoDB) + 백엔드 로컬 오케스트레이션
+├── .env.example                # GrowthBook SDK 키/시크릿 (복사 → .env)
 ├── config/                     # 선언형 플래그 (git-native), 환경별 디렉터리
 │   ├── dev/default/features.yaml
 │   ├── staging/default/features.yaml
@@ -57,11 +66,13 @@ flipt-demo/
 │   │   └── config/config.yml   # 환경/스토리지 정의 (local=baked, dev/staging/prod=원격 release/*)
 │   └── backend/                # Spring Boot (Gradle Kotlin DSL, Java 25)
 │       ├── src/main/java/com/example/fliptdemo/
-│       │   ├── config/         # FliptProperties, OpenFeatureConfig
-│       │   ├── featureflag/    # @FeatureFlag, FeatureFlagAspect, 예외
-│       │   └── web/            # DemoController, GlobalExceptionHandler
+│       │   ├── config/         # FliptProperties/OpenFeatureConfig/FliptInMemoryProvider(Flipt), GrowthBookProperties/GrowthBookConfig(GrowthBook)
+│       │   ├── featureflag/    # @FeatureFlag·@GrowthBookFlag 와 각 Aspect, 예외
+│       │   └── web/            # DemoController(Flipt), GrowthBookController(GrowthBook), GlobalExceptionHandler
 │       └── src/main/resources/ # application{,-local,-dev,-staging,-prod}.yml
 └── .github/workflows/          # backend-ci, flipt-validate
+
+# GrowthBook 은 선언형 git config 가 없습니다 — 플래그/SDK 키는 UI 에서 생성(MongoDB 저장)합니다.
 ```
 
 > 플래그 정의(`config/`)는 Flipt 앱 폴더와 분리되어 레포 최상위에 있습니다. `main` 에는 세 환경
@@ -76,11 +87,12 @@ flipt-demo/
 ## 빠른 시작
 
 ```bash
-# Flipt + 백엔드를 함께 기동 (백엔드는 기본 dev 환경)
+# Flipt + GrowthBook(+ MongoDB) + 백엔드를 함께 기동 (백엔드는 기본 dev 환경)
 docker compose up --build
 
-# Flipt UI:    http://localhost:8080
-# 백엔드 API:  http://localhost:8081/api/...
+# Flipt UI:       http://localhost:8080
+# GrowthBook UI:  http://localhost:3000   (API: http://localhost:3100)
+# 백엔드 API:     http://localhost:8081/api/...
 ```
 
 API 호출 예시:
@@ -116,12 +128,44 @@ SPRING_PROFILES_ACTIVE=local   docker compose up --build backend
 public Map<String, String> hello() { ... }
 ```
 
-`FeatureFlagAspect` 가 메서드 실행 전에 OpenFeature(→ Flipt OFREP)로 플래그를 평가합니다.
+`FeatureFlagAspect` 가 메서드 실행 전에 OpenFeature `Client` 로 플래그를 평가합니다(기본
+in-memory, `flipt.mode` 로 OFREP 전환 — 아래 ["Flipt 평가 방식"](#flipt-평가-방식--in-memory기본--ofrep) 참고).
 
 - 플래그 **ON** → 메서드 정상 실행 → `200 OK`
 - 플래그 **OFF** → `FeatureDisabledException` → `GlobalExceptionHandler` 가 `404 Not Found` 로 매핑
   (숨김 처리. 403/503 으로 바꾸려면 `GlobalExceptionHandler` 수정)
 - Flipt 불가/플래그 없음 → 어노테이션의 `fallback`(기본 `false`) 사용
+
+## Flipt 평가 방식 — in-memory(기본) / OFREP
+
+`@FeatureFlag` 는 항상 같은 OpenFeature `Client` 를 쓰고, 백엔드는 `flipt.mode` 로 그 뒤의
+provider 만 바꿉니다(어노테이션·컨트롤러·테스트 코드는 그대로).
+
+| `flipt.mode` | 평가 위치 | 동작 | 특징 |
+| --- | --- | --- | --- |
+| `in-memory` (기본) | 클라이언트 사이드 | `flipt-client-java`(Rust 코어 FFI)가 기동 시 스냅샷을 받아 **JVM 메모리에서 로컬 평가**(~0.1ms). 폴링(기본 30s) 또는 스트리밍으로 동기화 | 평가 시 네트워크 0, 서버가 잠시 끊겨도 마지막 스냅샷으로 평가 지속 |
+| `ofrep` | 서버 사이드 | OpenFeature **OFREP** provider 가 평가마다 Flipt 서버를 호출 | OpenFeature 표준(OFREP) 호환을 그대로 사용 |
+
+```bash
+# 기본은 in-memory — 추가 설정 없이 그대로 기동
+docker compose up --build backend
+
+# OFREP(서버 사이드) 평가로 전환
+FLIPT_MODE=ofrep docker compose up --build backend
+# 로컬 직접 실행이면:  FLIPT_MODE=ofrep ./gradlew bootRun
+```
+
+관련 설정(`application.yml`, 모두 환경변수로 오버라이드 가능):
+
+| 키 | 기본값 | 설명 |
+| --- | --- | --- |
+| `flipt.mode` | `in-memory` | `in-memory` 또는 `ofrep` (`FLIPT_MODE`) |
+| `flipt.sync-mode` | `polling` | in-memory 동기화: `polling` 또는 `streaming`(SSE) (`FLIPT_SYNC_MODE`) |
+| `flipt.update-interval-seconds` | `30` | 폴링 주기(초) (`FLIPT_UPDATE_INTERVAL`) |
+| `flipt.url` | `http://localhost:8080` | Flipt 서버 주소 — **두 모드 모두** 사용(in-memory도 스냅샷 fetch) (`FLIPT_URL`) |
+
+> in-memory 모드도 Flipt 서버가 필요합니다(스냅샷을 받아옴). 평가만 백엔드 메모리에서 일어나므로,
+> 스냅샷을 한 번 받은 뒤에는 Flipt 서버가 잠시 끊겨도 평가가 계속됩니다(폴링 갱신만 지연).
 
 ## 플래그 토글 방법
 
@@ -192,7 +236,8 @@ SPRING_PROFILES_ACTIVE=staging ./gradlew bootRun
 
 ## Flipt OFREP API 직접 호출
 
-SDK 없이 평가 동작을 확인하려면:
+Flipt 서버의 OFREP 엔드포인트는 백엔드의 `flipt.mode` 와 무관하게 항상 열려 있습니다. SDK 없이
+서버 평가 동작을 확인하려면:
 
 ```bash
 curl -s -X POST http://localhost:8080/ofrep/v1/evaluate/flags/demo-api \
@@ -214,6 +259,7 @@ cd apps/backend
 
 - `FeatureFlagAspectTest` — 플래그 ON 이면 메서드 실행, OFF 면 `FeatureDisabledException`
 - `DemoControllerTest` — 플래그 ON→200, OFF→404(`$.flag` 확인), `/api/health` 는 항상 200
+- `FliptInMemoryProviderTest` — in-memory provider 가 SDK 결과를 반영하고, 클라이언트 부재/예외 시 fallback
 
 ### git-native 동작 검증
 
@@ -273,6 +319,62 @@ sleep 35; eval_dev             # => value:true
 > `local`(baked) 은 시작 시점의 git HEAD 를 읽어 파일 수정 시 재빌드가 필요하지만, 원격
 > 환경은 `poll_interval` 마다 브랜치를 다시 가져오므로 **push 만으로 자동 반영**됩니다. 서버
 > UI 로는 원격 환경을 수정할 수 없어(자격증명 없음) git 이 단일 소스로 유지됩니다.
+
+## GrowthBook 비교
+
+같은 백엔드가 **Flipt** 와 **GrowthBook** 두 provider 를 각각 평가하도록 구성되어 있습니다.
+엔드포인트가 1:1 로 대응되어 동일 시나리오를 나란히 비교할 수 있습니다.
+
+| 시나리오 | Flipt | GrowthBook |
+| --- | --- | --- |
+| 기본 API (`demo-api`) | `GET /api/demo/hello` | `GET /api/growthbook/hello` |
+| 베타 (`beta-feature`) | `GET /api/demo/beta` | `GET /api/growthbook/beta` |
+| 대조군(게이팅 없음) | `GET /api/health` | `GET /api/growthbook/health` |
+
+- 평가 방식: Flipt 는 OpenFeature `Client`(**기본 in-memory `flipt-client-java`**, `flipt.mode=ofrep`
+  로 OFREP 전환), GrowthBook 은 **네이티브 Java SDK**(`GrowthBookClient`). **둘 다 기본은 클라이언트
+  사이드 in-memory 평가**라 호출당 네트워크가 없습니다.
+- 게이팅 동작은 동일합니다 — 플래그 **OFF → 404**, 평가 불가/미설정 → 어노테이션 `fallback`(기본 off).
+- **핵심 차이**: Flipt 는 플래그가 git(`config/`)에 선언형으로 존재하지만, **GrowthBook 은 git
+  config 가 없어 플래그·SDK 키를 UI 에서 만들어야 합니다**(MongoDB 저장). 그래서 GrowthBook 은
+  MongoDB 가 필수이고, SDK 키는 아래처럼 수동 발급 → `.env` 주입으로 연결합니다.
+
+### GrowthBook 셋업 (최초 1회)
+
+```bash
+cp .env.example .env          # 키는 비워둔 채 시작해도 백엔드는 기동됨
+docker compose up --build     # mongo → growthbook → flipt → backend
+```
+
+1. **계정/조직 생성** — http://localhost:3000 접속 후 최초 관리자 계정을 만듭니다(MongoDB 에 저장).
+2. **Feature 생성** — Features 메뉴에서 Flipt 와 **동일한 키**로 boolean feature 를 만듭니다.
+   - `demo-api` → 기본값 **on**
+   - `beta-feature` → 기본값 **on**(끄고 켜며 비교)
+3. **SDK Connection 생성** — Settings → SDK Connections → 새로 생성 후 **Client Key** 복사.
+4. **키 주입** — `.env` 의 `GROWTHBOOK_CLIENT_KEY=` 에 붙여넣고 백엔드만 재기동합니다.
+
+   ```bash
+   docker compose up -d --build backend
+   ```
+
+> 백엔드(컨테이너)는 GrowthBook API 를 `http://growthbook:3100` 으로 호출합니다(compose 네트워크
+> 내부 주소, `GROWTHBOOK_API_HOST`). UI 가 보여주는 `http://localhost:3100` 대신 이 값을 씁니다.
+> 키가 비어 있으면 `/api/growthbook/*` 는 fallback(off)으로 404 를 반환하지만 백엔드는 정상 기동합니다.
+
+### 비교 호출
+
+```bash
+# 두 provider 모두 demo-api 가 on → 둘 다 200
+curl -i http://localhost:8081/api/demo/hello
+curl -i http://localhost:8081/api/growthbook/hello
+
+# GrowthBook UI 에서 beta-feature 를 off 로 바꾸면 → GrowthBook 만 404, Flipt 는 그대로
+curl -i http://localhost:8081/api/demo/beta        # Flipt
+curl -i http://localhost:8081/api/growthbook/beta  # GrowthBook
+```
+
+> 로컬에서 백엔드를 직접 실행(`./gradlew bootRun`)할 때는 GrowthBook API 가 `http://localhost:3100`
+> 이므로 `GROWTHBOOK_API_HOST` 를 그대로 두고 `GROWTHBOOK_CLIENT_KEY` 만 환경변수로 주면 됩니다.
 
 ## CI (GitHub Actions)
 

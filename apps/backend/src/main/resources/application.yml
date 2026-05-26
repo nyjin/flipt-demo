@@ -8,11 +8,27 @@ spring:
     default: dev # `dev` is used when no profile is set explicitly
 
 flipt:
+  # How to evaluate Flipt flags:
+  #   in-memory (default) — client-side SDK evaluates in-process against a snapshot
+  #   ofrep               — OpenFeature OFREP provider evaluates server-side
+  mode: ${FLIPT_MODE:in-memory}
+  # in-memory snapshot refresh: polling (default) or streaming (SSE).
+  sync-mode: ${FLIPT_SYNC_MODE:polling}
+  update-interval-seconds: ${FLIPT_UPDATE_INTERVAL:30}
   # Base URL of the Flipt server. Override with FLIPT_URL (e.g. http://flipt:8080
-  # when running under docker-compose).
+  # when running under docker-compose). Used by BOTH modes — in-memory fetches its
+  # snapshot from here.
   url: ${FLIPT_URL:http://localhost:8080}
   namespace: ${FLIPT_NAMESPACE:default}
-  # `environment` is set per profile (see application-{dev,preview,prod}.yml).
+  # `environment` is set per profile (see application-{dev,staging,prod}.yml).
+
+growthbook:
+  # GrowthBook API base URL. Override with GROWTHBOOK_API_HOST (e.g.
+  # http://growthbook:3100 when running under docker-compose).
+  api-host: ${GROWTHBOOK_API_HOST:http://localhost:3100}
+  # SDK Connection client key issued by the GrowthBook UI. Empty until GrowthBook
+  # is set up; while empty, GrowthBook evaluations fall back to off.
+  client-key: ${GROWTHBOOK_CLIENT_KEY:}
 
 management:
   endpoints:

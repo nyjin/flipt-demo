@@ -19,4 +19,7 @@ FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
 EXPOSE 8081
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+# --enable-native-access: the Flipt in-memory SDK loads a native engine via JNA;
+# granting native access silences the JDK 25 restricted-method warning (and is
+# required once the JDK starts blocking it by default).
+ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-jar", "/app/app.jar"]

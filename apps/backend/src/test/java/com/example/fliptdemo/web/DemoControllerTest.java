@@ -21,7 +21,10 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
  * method and the global handler maps a disabled feature to HTTP 404. The
  * OpenFeature {@link Client} is mocked so no Flipt server is required.
  */
-@SpringBootTest
+// Force the OFREP provider for the test context so loading it doesn't spin up the
+// in-memory SDK's native engine or try to fetch a snapshot over the network. The
+// OpenFeature Client is mocked anyway, so this doesn't affect what's under test.
+@SpringBootTest(properties = "flipt.mode=ofrep")
 @AutoConfigureMockMvc
 class DemoControllerTest {
 

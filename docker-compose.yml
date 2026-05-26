@@ -1,13 +1,19 @@
-# Local orchestration for the Flipt feature-flag demo.
+# Local orchestration for the Flipt vs GrowthBook feature-flag demo.
 #
-#   docker compose up --build            # run both Flipt and the backend
+#   docker compose up --build            # run Flipt, GrowthBook (+ MongoDB) and the backend
 #   docker compose up --build flipt      # run only Flipt (e.g. to use `gradlew bootRun` locally)
 #
 # Flipt UI:        http://localhost:8080
+# GrowthBook UI:   http://localhost:3000   (API on :3100)
 # Backend API:     http://localhost:8081/api/...
 #
 # The backend defaults to the `dev` Flipt environment. Override SPRING_PROFILES_ACTIVE
 # (dev|preview|prod) to point it at a different environment.
+#
+# GrowthBook has no declarative/git-native config: create the `demo-api` /
+# `beta-feature` flags and an SDK Connection in the GrowthBook UI first, then put
+# the SDK client key in `.env` (GROWTHBOOK_CLIENT_KEY) — see README. Until the key
+# is set the backend still boots; GrowthBook evaluations just fall back to off.
 
 services:
   flipt:
@@ -29,6 +35,40 @@ services:
       retries: 10
       start_period: 20s # allow time for the initial remote clone
 
+  # GrowthBook stores all its state (flags, SDK connections, users) in MongoDB,
+  # so MongoDB is a hard dependency. This config is for local/dev only.
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  growthbook:
+    image: growthbook/growthbook:latest
+    ports:
+      - "3000:3000" # UI (APP_ORIGIN)
+      - "3100:3100" # API — the SDK fetches /api/features/{client-key} here
+    environment:
+      MONGODB_URI: mongodb://root:password@mongo:27017/growthbook?authSource=admin
+      APP_ORIGIN: http://localhost:3000
+      API_HOST: http://localhost:3100
+      NODE_ENV: production
+      JWT_SECRET: ${GROWTHBOOK_JWT_SECRET:-local-dev-jwt-secret-change-me}
+      ENCRYPTION_KEY: ${GROWTHBOOK_ENCRYPTION_KEY:-local-dev-encryption-key-change-me}
+    volumes:
+      - gb-uploads:/usr/local/src/app/packages/back-end/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+
   backend:
     build:
       context: ./apps/backend
@@ -37,7 +77,23 @@ services:
       - "8081:8081"
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      # Flipt evaluation mode: in-memory (default, client-side SDK) | ofrep (server-side).
+      FLIPT_MODE: ${FLIPT_MODE:-in-memory}
+      # Both modes need the server: in-memory fetches its snapshot from here.
       FLIPT_URL: http://flipt:8080
+      # GrowthBook API as seen from inside the compose network (not localhost).
+      GROWTHBOOK_API_HOST: http://growthbook:3100
+      # Paste the SDK Connection client key here (via .env). Empty = GrowthBook
+      # evaluations fall back to off, but the backend still boots normally.
+      GROWTHBOOK_CLIENT_KEY: ${GROWTHBOOK_CLIENT_KEY:-}
     depends_on:
       flipt:
         condition: service_healthy
+      # Startup ordering only — the GrowthBook SDK loads features lazily and
+      # tolerates GrowthBook being unconfigured, so we don't require it healthy.
+      growthbook:
+        condition: service_started
+
+volumes:
+  mongodata:
+  gb-uploads:
