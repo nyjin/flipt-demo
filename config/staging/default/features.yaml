@@ -14,3 +14,51 @@ flags:
     type: BOOLEAN_FLAG_TYPE
     description: Toggles the GET /api/demo/beta endpoint (off in staging)
     enabled: false
+  # --- 시나리오 데모 플래그 (staging: 롤아웃 비중 축소) ----------------------
+  - key: ui-theme
+    name: UI Theme
+    type: VARIANT_FLAG_TYPE
+    description: Multivariate flag — treatment 20% (variant 시나리오)
+    enabled: true
+    variants:
+      - key: control
+        name: Control
+      - key: treatment
+        name: Treatment
+    rules:
+      - segment: all-users
+        distributions:
+          - variant: control
+            rollout: 80
+          - variant: treatment
+            rollout: 20
+  - key: premium-feature
+    name: Premium Feature
+    type: BOOLEAN_FLAG_TYPE
+    description: Segment 타겟팅 — tier=premium 에게만 on (targeting 시나리오)
+    enabled: false
+    rollouts:
+      - segment:
+          key: premium-tier
+          value: true
+  - key: gradual-rollout
+    name: Gradual Rollout
+    type: BOOLEAN_FLAG_TYPE
+    description: 퍼센트 롤아웃 — 20% (rollout 시나리오)
+    enabled: false
+    rollouts:
+      - threshold:
+          percentage: 20
+          value: true
+segments:
+  - key: all-users
+    name: All Users
+    match_type: ALL_MATCH_TYPE
+  - key: premium-tier
+    name: Premium Tier
+    match_type: ALL_MATCH_TYPE
+    constraints:
+      - type: STRING_COMPARISON_TYPE
+        property: tier
+        operator: eq
+        value: premium
