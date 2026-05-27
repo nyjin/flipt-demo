@@ -212,15 +212,29 @@ variants+rules+distributions), `premium-feature`(`rollouts` segment `premium-tie
 `gradual-rollout`(`rollouts` threshold). 추가 셋업 없이 동작합니다. boolean 타겟팅/롤아웃 플래그는
 기본값을 off(`enabled: false`)로 두고 룰이 on으로 올립니다.
 
-### GrowthBook 정의 (UI → MongoDB, 수동 셋업)
+### GrowthBook 정의 (REST API 시드 — `scripts/seed-growthbook.sh`)
 
-GrowthBook은 git config가 없으므로 **동일 키를 UI에서 생성**해야 시연됩니다(키 없으면 fallback=off/control):
+GrowthBook은 git config가 없으므로 동일 키를 **UI 또는 REST API로 생성**해야 시연됩니다(없으면
+fallback=off/control). Flipt가 `config/<env>/features.yaml`로 즉시 동작하는 것과 달리, GrowthBook은
+이 시드 단계가 필요합니다.
 
-1. Features에서 `ui-theme`(String, control/treatment), `premium-feature`(Boolean), `gradual-rollout`(Boolean) 생성
-2. `premium-feature` 타겟팅 룰: `tier == premium → ON`
-3. `gradual-rollout` percentage rollout 50% (hash attribute `id`)
-4. `ui-theme` experiment/rollout으로 control/treatment 분배
-5. SDK 키 주입(아래 "GrowthBook 셋업") 후 `/api/growthbook/{variant,targeted,rollout}`로 비교
+시드 스크립트가 `ui-theme`(experiment 50/50)·`premium-feature`(force `tier==premium`)·
+`gradual-rollout`(rollout 50%) + SDK Connection을 한 번에 만들어 줍니다. **단, GrowthBook은 최초
+관리자/Secret 키를 API로 만들 수 없어** 아래 1~2단계는 수동입니다:
+
+```bash
+# 1) (최초 1회) GrowthBook 기동 → http://localhost:3000 에서 관리자 계정/조직 생성
+docker compose up -d mongo growthbook
+# 2) (최초 1회) Settings → API Keys → "Secret" 키 생성, 환경 이름 확인(기본 org는 "production")
+# 3) 시드 실행 (features + SDK Connection 생성, client key 출력)
+GROWTHBOOK_SECRET=secret_xxx ./scripts/seed-growthbook.sh
+#    다른 환경이면:  GROWTHBOOK_SECRET=... GROWTHBOOK_ENV=dev ./scripts/seed-growthbook.sh
+# 4) 출력된 GROWTHBOOK_CLIENT_KEY=... 를 .env 에 넣고 백엔드 재기동
+docker compose up -d --build backend
+```
+
+이후 `/api/growthbook/{variant,targeted,rollout}`를 Flipt의 `/api/demo/*`와 1:1로 비교할 수 있습니다.
+(수동 UI로 만들고 싶으면 Features에서 같은 키·룰을 직접 생성해도 됩니다.)
 
 ## 플래그 토글 방법
 
